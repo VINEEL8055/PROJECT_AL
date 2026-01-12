@@ -3,14 +3,13 @@ import boto3
 import fitz
 import json
 import tempfile
+import uuid  # ✅ NEW: for unique filenames
 
 # =================================================
-# 🔐 DIRECT R2 CREDENTIALS (PASTE HERE)
+# 🔐 R2 CONFIG
 # =================================================
 BUCKET_NAME = "al-pdf-store"
 INDEX_KEY = "pdf_search_index.json"
-
-import streamlit as st
 
 R2_ENDPOINT = st.secrets["R2_ENDPOINT"]
 R2_ACCESS_KEY = st.secrets["R2_ACCESS_KEY"]
@@ -25,6 +24,7 @@ s3 = boto3.client(
     region_name="auto"
 )
 
+# ---------------- STREAMLIT UI ----------------
 st.set_page_config(page_title="PDF Search & Merge", layout="centered")
 st.title("📄 PDF Search & Merge")
 
@@ -67,14 +67,12 @@ if uploaded_files:
         for file in uploaded_files:
             pdf_bytes = file.read()
 
-            # Upload PDF to R2
             s3.put_object(
                 Bucket=BUCKET_NAME,
                 Key=file.name,
                 Body=pdf_bytes
             )
 
-            # Update index immediately
             update_index_for_pdf(file.name, pdf_bytes, index)
 
         save_index(index)
@@ -98,6 +96,7 @@ if st.button("Search & Merge"):
 
         merged = fitz.open()
         matches = 0
+        matched_pdfs = set()  # ✅ NEW: track matched PDFs
 
         with st.spinner("Searching PDFs..."):
             for pdf_key, pages in index.items():
@@ -108,6 +107,8 @@ if st.button("Search & Merge"):
 
                 if not matched_pages:
                     continue
+
+                matched_pdfs.add(pdf_key)
 
                 with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
                     s3.download_fileobj(BUCKET_NAME, pdf_key, tmp)
@@ -121,16 +122,22 @@ if st.button("Search & Merge"):
         if matches == 0:
             st.error("❌ No matches found.")
         else:
-            out_file = "merged_result.pdf"
+            # ✅ NEW: unique output file (multi-user safe)
+            out_file = f"merged_{uuid.uuid4().hex}.pdf"
             merged.save(out_file)
             merged.close()
+
+            st.subheader("📄 Matched PDFs")
+            for pdf in matched_pdfs:
+                st.write("•", pdf)
 
             with open(out_file, "rb") as f:
                 st.download_button(
                     "⬇️ Download Merged PDF",
                     f,
-                    file_name="merged_result.pdf",
+                    file_name=out_file,
                     mime="application/pdf"
                 )
 
             st.success(f"✅ Merged {matches} pages")
+
